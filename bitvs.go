@@ -2,12 +2,25 @@ package main
 
 import (
 	"fmt"
-	// "math/rand"
+	"math/rand"
 	"math"
+	"os"
+	"bufio"
+	// "io"
+	"encoding/gob"
+	"encoding/json"
+	// "encoding/binary"
+	// "io/ioutil"
 	"sort"
 	"strings"
+	"strconv"
 	"bytes"
+	// "reflect"
+	// "unsafe"
+	// "runtime"
+	"time"
 	"github.com/bradleyjkemp/memviz"
+	// "github.com/go-restruct/restruct"
 )
 
 // probably unnecessary
@@ -28,53 +41,53 @@ import (
 // }
 
 type rs_struct struct {
-	bits []int
-	sblocks []int
-	sblock_length int
-	blocks []int
-	block_length int
-	table map[int][]int
+	Bits []bool
+	Sblocks []int
+	Sblock_length int
+	Blocks []int
+	Block_length int
+	Table map[int][]int
 }
 
-func build_rank_select(bits []int) *rs_struct {
+func build_rank_select(bits []bool) *rs_struct {
 	l := float64(len(bits))
 	sblock_size := int(math.Pow(math.Log2(l), 2)/2)
 	block_size := int(math.Log2(l)/2)
 
 	rs := new(rs_struct)
-	rs.bits = bits
-	rs.sblocks = make([]int, int(math.Ceil(l/float64(sblock_size))))
-	rs.sblock_length = sblock_size
-	rs.blocks = make([]int, int(math.Ceil(l/float64(block_size))))
-	rs.block_length = block_size
-	rs.table = make(map[int][]int)
+	rs.Bits = bits
+	rs.Sblocks = make([]int, int(math.Ceil(l/float64(sblock_size))))
+	rs.Sblock_length = sblock_size
+	rs.Blocks = make([]int, int(math.Ceil(l/float64(block_size))))
+	rs.Block_length = block_size
+	rs.Table = make(map[int][]int)
 
 	global_rank := 0
 	last_block_rank := 0
 
-	if bits[0] == 1 {
+	if bits[0] == true {
 		global_rank++
 	}
-	rs.sblocks[0] = 0
-	rs.blocks[0] = 0
+	rs.Sblocks[0] = 0
+	rs.Blocks[0] = 0
 
 	for i := 1; i < len(bits); i++ {
 		if i % sblock_size == 0 {
 			last_block_rank = global_rank
-			rs.sblocks[i/sblock_size] = global_rank
+			rs.Sblocks[i/sblock_size] = global_rank
 		}
 
 		if i % block_size == 0 {
-			rs.blocks[i/block_size] = global_rank - last_block_rank
+			rs.Blocks[i/block_size] = global_rank - last_block_rank
 		}
 
-		if bits[i] == 1 {
+		if bits[i] == true {
 			global_rank++ 
 		}
 	}
 
 	for i := 0; i < int(math.Pow(2, float64(block_size))); i++ {
-		rs.table[i] = make([]int, block_size)
+		rs.Table[i] = make([]int, block_size)
 
 		k := i
 		vec := make([]int, block_size)
@@ -90,44 +103,62 @@ func build_rank_select(bits []int) *rs_struct {
 			if vec[j] == 1 {
 				global_rank++
 			}
-			rs.table[i][j] = global_rank
+			rs.Table[i][j] = global_rank
 		}
 	}
 
 	return rs
 }
 
+func (rs rs_struct) overhead() int {
+	// fmt.Println("rs ", rs.Sblock_length, rs.Block_length, len(rs.Table))
+
+	// return int(unsafe.Sizeof(rs))
+	return (64 * rs.Sblock_length) +  64 + (64 * rs.Block_length) + 64 + (64 * len(rs.Table) * rs.Block_length)
+	// return len(rs.Sblocks) + int(unsafe.Sizeof(rs.Sblock_length)) + 
+	// 		int(unsafe.Sizeof(rs.Block_length)) + int(unsafe.Sizeof(rs.Blocks))*len(rs.Blocks) + int(unsafe.Sizeof(rs.Table))
+}
+
 func (rs rs_struct) rank1(i int) int {
-	i_sblock := i/rs.sblock_length
-	i_block := i/rs.block_length
-	i_table := i%rs.block_length
+	i_sblock := i/rs.Sblock_length
+	i_block := i/rs.Block_length
+	i_table := i%rs.Block_length
 	
-	rank := rs.sblocks[i_sblock]
-	rank += rs.blocks[i_block]
+	rank := rs.Sblocks[i_sblock]
+	rank += rs.Blocks[i_block]
+
+	// fmt.Println(rs)
+	// fmt.Println("i_sblock, i_block, i_table", i_sblock, i_block, i_table)
 	
-	bit := rs.bits[i_block*rs.block_length:(i_block + 1) *rs.block_length]
+	bit := rs.Bits[i_block*rs.Block_length:(i_block + 1) *rs.Block_length]
 	val := 0
 	for i := 0; i < len(bit); i++ {
-		val += (bit[len(bit) - i - 1] * int(math.Pow(2, float64(i))))
+		tval := 0
+		if bit[len(bit) - i - 1] == true {
+			tval = 1
+		}
+		val += (tval * int(math.Pow(2, float64(i))))
 	}
 
-	rank += rs.table[val][i_table]
-	return rank
+	rank += rs.Table[val][i_table]
+	return rank - 1
 }
 
 func (rs rs_struct) rank0(i int) int {
 	rank := rs.rank1(i)
-	return i - rank 
+	return i - rank - 1
 }
 
 func (rs rs_struct) select1(i int) int {
+	// fmt.Println("select1 ", i)
 	start := 0
-	end := len(rs.bits)
+	end := len(rs.Bits)
 
 	found := -1
 	rfound := -1
 
 	for start < end {
+		// fmt.Println("start, end ", start, end)
 		mid := (start + end) /2
 		rmid := rs.rank1(mid)
 
@@ -160,20 +191,20 @@ func (rs rs_struct) select1(i int) int {
 	} else {
 
 		if rfound > i {
-			fmt.Println("found > i")
+			// fmt.Println("found > i")
 			for j := start; j >= 0; j-- {
 				rank := rs.rank0(j)
-				fmt.Println("j, rank ", j, rank)
+				// fmt.Println("j, rank ", j, rank)
 				if i-1 == rank {
 					found = j + 1
 					break
 				}
 			}
 		} else {
-			fmt.Println("found < i")
-			for j := start; j < len(rs.bits); j++ {
+			// fmt.Println("found < i")
+			for j := start; j < len(rs.Bits); j++ {
 				rank := rs.rank0(j)
-				fmt.Println("j, rank ", j, rank)
+				// fmt.Println("j, rank ", j, rank)
 				if i == rank {
 					return j + 1
 				}
@@ -185,21 +216,21 @@ func (rs rs_struct) select1(i int) int {
 }
 
 func (rs rs_struct) select0(i int) int {
-	fmt.Println("select0 ", i)
-	fmt.Println("rs ", rs)
+	// fmt.Println("select0 ", i)
+	// fmt.Println("rs ", rs)
 
 	start := 0
-	end := len(rs.bits)
+	end := len(rs.Bits)
 
 	found := -1
 	rfound := -1
 
 	for start < end {
-		fmt.Println("start, end ", start, end)
+		// fmt.Println("start, end ", start, end)
 		mid := (start + end) /2
 		rmid := rs.rank0(mid)
 
-		fmt.Println("mid, rmid ", mid, rmid)
+		// fmt.Println("mid, rmid ", mid, rmid)
 
 		if i == rmid {
 			found = mid
@@ -213,11 +244,11 @@ func (rs rs_struct) select0(i int) int {
 		}
 
 		rfound = rmid
-		fmt.Println("endging start, end ", start, end)
+		// fmt.Println("ending start, end ", start, end)
 	}
 
-	fmt.Println("found, rfound ", found, rfound)
-	fmt.Println("start, end ", start, end)
+	// fmt.Println("found, rfound ", found, rfound)
+	// fmt.Println("start, end ", start, end)
 
 	if found != -1 {
 		// check if found is actually the first
@@ -234,20 +265,20 @@ func (rs rs_struct) select0(i int) int {
 	} else {
 
 		if rfound > i {
-			fmt.Println("found > i")
+			// fmt.Println("found > i")
 			for j := start; j >= 0; j-- {
 				rank := rs.rank0(j)
-				fmt.Println("j, rank ", j, rank)
+				// fmt.Println("j, rank ", j, rank)
 				if i-1 == rank {
 					found = j + 1
 					break
 				}
 			}
 		} else {
-			fmt.Println("found < i")
-			for j := start; j < len(rs.bits); j++ {
+			// fmt.Println("found < i")
+			for j := start; j < len(rs.Bits); j++ {
 				rank := rs.rank0(j)
-				fmt.Println("j, rank ", j, rank)
+				// fmt.Println("j, rank ", j, rank)
 				if i == rank {
 					return j + 1
 				}
@@ -260,27 +291,27 @@ func (rs rs_struct) select0(i int) int {
 }
 
 type wt struct {
-	edges map[int]*wt
-	text string
-	bits []int
-	bitmap map[string]int
-	rs *rs_struct
+	Edges map[int]*wt
+	Text string
+	Bits []bool
+	Bitmap map[string]bool
+	Rs *rs_struct
 	parent *wt
 }
 
 func makeWT(length int) *wt {
 	wtree := new(wt)
-	wtree.edges = make(map[int]*wt)
-	wtree.text = ""
-	wtree.bits = make([]int, length)
-	wtree.bitmap = make(map[string]int)
-	wtree.rs = new(rs_struct)
+	wtree.Edges = make(map[int]*wt)
+	wtree.Text = ""
+	wtree.Bits = make([]bool, length)
+	wtree.Bitmap = make(map[string]bool)
+	wtree.Rs = new(rs_struct)
 
 	return wtree
 }
 
-func make_bit_vector(text string, rseg []string) ([]int, string, string) {
-	bits := make([]int, len(text))
+func make_bit_vector(text string, rseg []string) ([]bool, string, string) {
+	bits := make([]bool, len(text))
 	
 	lstring := ""
 	rstring := ""
@@ -300,8 +331,12 @@ func make_bit_vector(text string, rseg []string) ([]int, string, string) {
 			lstring += string(r)
 		 }
 
-
-		 bits[i] = found
+		 if found == 0 {
+			bits[i] = false
+		 } else {
+			bits[i] = true
+		 }
+		//  bits[i] = found
 	}
 
 	return bits, lstring, rstring
@@ -309,9 +344,9 @@ func make_bit_vector(text string, rseg []string) ([]int, string, string) {
 
 
 func build_wt(root *wt, text string) *wt {
-	fmt.Println("Building ", text)
+	// fmt.Println("Building ", text)
 
-	root.text = text
+	root.Text = text
 
 	hist := make(map[string]int)
 
@@ -319,7 +354,7 @@ func build_wt(root *wt, text string) *wt {
 		hist[string(r)] += 1
 	}
 	
-	fmt.Println("hist - ", hist, len(hist))
+	// fmt.Println("hist - ", hist, len(hist))
 
 	keys := make([]string, len(hist))
 	count := 0
@@ -328,54 +363,54 @@ func build_wt(root *wt, text string) *wt {
 		count++
 	}
 
-	fmt.Println("keys ", keys)
+	// fmt.Println("keys ", keys)
 
 	sort.Strings(keys)
 
-	fmt.Println("after sort ", keys)
+	// fmt.Println("after sort ", keys)
 	key_len := len(keys)
 	
 	lchild := keys[0:key_len/2]
 	for _, r := range lchild {
-		root.bitmap[string(r)] = 0
+		root.Bitmap[string(r)] = false
 	}
 	
 	rchild := keys[key_len/2:key_len] 
 	for _, r := range rchild {
-		root.bitmap[string(r)] = 1
+		root.Bitmap[string(r)] = true
 	}
 
-	fmt.Println("lchild, rchild ", lchild, rchild)
+	// fmt.Println("lchild, rchild ", lchild, rchild)
 
 	bits, lstring, rstring := make_bit_vector(text, rchild)
 
-	fmt.Println("bits, lstring, rstring ", bits, lstring, rstring)
+	// fmt.Println("bits, lstring, rstring ", bits, lstring, rstring)
 
-	root.bits = bits
-	root.rs = build_rank_select(bits)
+	root.Bits = bits
+	root.Rs = build_rank_select(bits)
 	
 	if len(lchild) > 1 {
-		fmt.Println("lchild > 1 ", strings.Join(lchild, ""))
-		root.edges[0] = build_wt(makeWT(len(lstring)), lstring)
-		root.edges[0].parent = root
+		// fmt.Println("lchild > 1 ", strings.Join(lchild, ""))
+		root.Edges[0] = build_wt(makeWT(len(lstring)), lstring)
+		// root.Edges[0].parent = root
 
 	} else if len(lchild) == 1 {
-		fmt.Println("lchild == 1 ", strings.Join(lchild, ""))
-		root.edges[0] = makeWT(len(lstring))
-		root.edges[0].text = lstring
-		root.edges[0].parent = root
+		// fmt.Println("lchild == 1 ", strings.Join(lchild, ""))
+		root.Edges[0] = makeWT(len(lstring))
+		root.Edges[0].Text = lstring
+		// root.Edges[0].parent = root
 		// fmt.Println("lchild == 1 ", root.edges[strings.Join(lchild, "")])
 	}
 	
 	if len(rchild) > 1 {
-		fmt.Println("rchild > 1", strings.Join(rchild, ""))
-		root.edges[1] = build_wt(makeWT(len(rstring)), rstring)
-		root.edges[1].parent = root
+		// fmt.Println("rchild > 1", strings.Join(rchild, ""))
+		root.Edges[1] = build_wt(makeWT(len(rstring)), rstring)
+		// root.Edges[1].parent = root
 	} else if len(rchild) == 1 {
-		fmt.Println("rchild == 1 ", strings.Join(rchild, ""))
-		root.edges[1] = makeWT(len(rstring))
-		root.edges[1].text = rstring
-		root.edges[1].parent = root
+		// fmt.Println("rchild == 1 ", strings.Join(rchild, ""))
+		root.Edges[1] = makeWT(len(rstring))
+		root.Edges[1].Text = rstring
+		// root.Edges[1].parent = root
 		// fmt.Println("lchild == 1 ", root.edges[strings.Join(rchild, "")])
 	}
 
@@ -383,98 +418,98 @@ func build_wt(root *wt, text string) *wt {
 }
 
 func (wtree wt) access(i int) string {
-	fmt.Println("i", i)
-	fmt.Println("wtree", wtree)
+	// fmt.Println("i", i)
+	// fmt.Println("wtree", wtree)
 
-	if len(wtree.edges) == 0 {
-		fmt.Println("no more edges", wtree.text[0:1])
-		return wtree.text[0:1]
+	if len(wtree.Edges) == 0 {
+		// fmt.Println("no more edges", wtree.text[0:1])
+		return wtree.Text[0:1]
 	}
 
-	bit := wtree.bits[i]
-	fmt.Println("bit", bit)
+	bit := wtree.Bits[i]
+	// fmt.Println("bit", bit)
 
-	if bit == 0 {
+	if bit == false {
 		// go left
+		rleft := wtree.Rs.rank0(i)
 		// fmt.Println("left", rleft)
-		rleft := wtree.rs.rank0(i)
-		fmt.Println("left", rleft)
-		return wtree.edges[0].access(rleft)
+		return wtree.Edges[0].access(rleft)
 	} else {
 		// go right
-		rright := wtree.rs.rank1(i)
-		fmt.Println("right", rright)
-		return wtree.edges[1].access(rright)
+		rright := wtree.Rs.rank1(i)
+		// fmt.Println("right", rright)
+		return wtree.Edges[1].access(rright)
 	}
 }
 
 func (wtree wt) rank(c string, i int) int {
-	fmt.Println("c, i", c, i)
-	fmt.Println("wtree", wtree)
+	// fmt.Println("c, i", c, i)
+	// fmt.Println("wtree", wtree)
 
-	if len(wtree.edges) == 0 {
-		fmt.Println("no more edges", wtree.text[0:1])
-		return i
+	if len(wtree.Edges) == 0 {
+		// fmt.Println("no more edges", wtree.text[0:1])
+		return i + 1
 	}
 
-	bit := wtree.bitmap[c]
-	fmt.Println("bit", bit)
+	bit := wtree.Bitmap[c]
+	// fmt.Println("bit", bit)
 	// rank := 0
 
-	if bit == 0 {
+	if bit == false {
 		// go left
 		// fmt.Println("left", rleft)
-		rleft := wtree.rs.rank0(i)
-		fmt.Println("left", rleft)
-		return wtree.edges[0].rank(c, rleft)
+		rleft := wtree.Rs.rank0(i)
+		// fmt.Println("left", rleft)
+		return wtree.Edges[0].rank(c, rleft)
 	} else {
 		// go right
-		rright := wtree.rs.rank1(i)
-		fmt.Println("right", rright)
-		return wtree.edges[1].rank(c, rright)
+		rright := wtree.Rs.rank1(i)
+		// fmt.Println("right", rright)
+		return wtree.Edges[1].rank(c, rright)
 	}
-
 }
 
 func (wtree wt) traverse_leaf(c string) *wt {
-	fmt.Println("traverse leaf ", c)
-	if len(wtree.edges) == 0 {
-		fmt.Println("no more edges", wtree.text[0:1])
+	// fmt.Println("traverse leaf ", c)
+	if len(wtree.Edges) == 0 {
+		// fmt.Println("no more edges", wtree.text[0:1])
 		return wtree.parent
 	}
 
-	bit := wtree.bitmap[c]
-	fmt.Println("bit", bit)
+	bit := wtree.Bitmap[c]
+	// fmt.Println("bit", bit)
 	// rank := 0
 
-	if bit == 0 {
+	if bit == false {
 		// go left
-		return wtree.edges[0].traverse_leaf(c)
+		wtree.Edges[0].parent = &wtree
+		return wtree.Edges[0].traverse_leaf(c)
 	} else {
 		// go right
-		return wtree.edges[1].traverse_leaf(c)
+		wtree.Edges[1].parent = &wtree
+		return wtree.Edges[1].traverse_leaf(c)
 	}
 }
 
 func (wtree wt) iselect(c string, i int) int {
-	fmt.Println("isselect ", c, i)
-	fmt.Println("issel wtree ", wtree)
+	// fmt.Println("isselect ", c, i)
+	// fmt.Println("issel wtree ", wtree)
 	
 	isel := 0
-	bit := wtree.bitmap[c]
-	fmt.Println("bit ", bit)
-	if bit == 0 {
-		isel = wtree.rs.select0(i)
-		fmt.Println("left isselect ", isel)
+	bit := wtree.Bitmap[c]
+	// fmt.Println("bit ", bit)
+	if bit == false {
+		isel = wtree.Rs.select0(i)
+		// fmt.Println("left isselect ", isel)
 	} else {
-		isel = wtree.rs.select1(i)
-		fmt.Println("right isselect ", isel)
+		isel = wtree.Rs.select1(i)
+		// fmt.Println("right isselect ", isel)
 	}
 
-	fmt.Println("isel", isel)
-	fmt.Println("wtree.parent", wtree.parent)
+	// fmt.Println("isel", isel)
+	// fmt.Println("wtree.parent", wtree.parent)
 	if wtree.parent == nil {
-		fmt.Println("is nil", )
+		// fmt.Println("is nil", )
 		return isel
 	}
 
@@ -491,64 +526,408 @@ func (wtree wt) iselect(c string, i int) int {
 
 
 func (wtree wt) wtselect(c string, i int) int {
-	fmt.Println("c, i", c, i)
+	// fmt.Println("c, i", c, i)
 	// traverse to leaf
 	leaf := wtree.traverse_leaf(c)
 
-	fmt.Println("leaf in sel ", leaf)
+	// fmt.Println("leaf in sel ", leaf)
 	// bit := leaf.bitmap[c]
 	// fmt.Println("bit ", bit)
 
 	return leaf.iselect(c, i)
 }
 
+func validate_args(args []string) bool {
+
+	if args[0] != "help" && len(args) != 3 {
+		return false
+	}
+	return true
+}
+
+func (wtree wt) save_wt(fileName string) {
+	f, err := os.Create(fileName)
+	if err != nil {
+		panic(err)
+	}
+
+	enc := gob.NewEncoder(f)
+	err = enc.Encode(wtree)
+	if err != nil {
+		panic(err)
+	}
+	f.Close()
+}
+
+func load_wt(fileName string) *wt {
+	f, err := os.Open(fileName)
+	if err != nil {
+		panic(err)
+	}
+	dec := gob.NewDecoder(f)
+
+	var wtree wt
+	dec.Decode(&wtree)
+	f.Close()
+	// fmt.Println(wtree)
+
+	return &wtree
+}
 
 func main() {
-	bitvec := []int{1,0,0,1,0,1,1,1,0,1,0,0,1,0,1,0}
-	rs := build_rank_select(bitvec)
-	fmt.Println(rs)	
 
-	rank1 := rs.rank1(7)
-	rank0 := rs.rank0(4)
-	fmt.Println("rank", rank0)
-	fmt.Println("rank", rank1)
+	// first argument is the name of the binary
+	args := os.Args[1:]
 
-	fmt.Println(bitvec)
+	// parse the operation to perform
+	switch args[0] {
+		case "build":
+			// wt build <input string> <output file>
+			if validate_args(args) == false {
+				panic("invalid arguments!")
+			}
 
-	select1 := rs.select1(6)
-	fmt.Println("select1", select1)
-	select0 := rs.select0(3)
-	fmt.Println("fselect0", select0)
-	select0 = rs.select0(4)
-	fmt.Println("fselect0", select0)	
-	select0 = rs.select0(5)
-	fmt.Println("fselect0", select0)
-	select0 = rs.select0(6)
-	fmt.Println("fselect0", select0)
-	select0 = rs.select0(7)
-	fmt.Println("fselect0", select0)
+			text := args[1]
 
-	text := "alabar_a_la_alabarda"
-	twt := makeWT(len(text))
-	twt = build_wt(twt, text)
-	fmt.Println(twt)
+			twt := makeWT(len(text))
+			twt = build_wt(twt, text)
+			// fmt.Println(twt)
 
-	fmt.Println("$$$$$ ACCCESS $$$$$$$")
-	c := twt.access(7)
-	fmt.Println("access ", c)
+			twt.save_wt(args[2])
 
-	fmt.Println("$$$$$ RANK $$$$$$$")
-	i := twt.rank("a", 10)
-	fmt.Println("rank ", i)
+			fmt.Println("output file ", args[2], "successfully created!")
+		case "access":
+			// $wt access <saved wt> <access indices>
+			if validate_args(args) == false {
+				panic("invalid arguments!")
+			}
 
-	fmt.Println("$$$$$ SELECT $$$$$$$")
-	s := twt.wtselect("a", 4)
-	fmt.Println("select ", s)
+			wtree := load_wt(args[1])
+			// fmt.Println(wtree)
 
-	buf := &bytes.Buffer{}
-	memviz.Map(buf, twt)
+			file, _ := os.Open(args[2])
+    		fscanner := bufio.NewScanner(file)
+			for fscanner.Scan() {
+				i, err := strconv.ParseInt(fscanner.Text(), 10, 32)
+				if err != nil {
+					panic("index error!")
+				}
+	
+				c := wtree.access(int(i))
+				fmt.Println(c)
+			}
+		case "rank":
+			// $wt access <saved wt> <access indices>
+			if validate_args(args) == false {
+				panic("invalid arguments!")
+			}
+			
+			wtree := load_wt(args[1])
+
+			file, _ := os.Open(args[2])
+    		fscanner := bufio.NewScanner(file)
+			for fscanner.Scan() {
+				// fmt.Println(fscanner.Text())
+				words := strings.Fields(fscanner.Text())
+				i, err := strconv.ParseInt(words[1], 10, 32)
+				if err != nil {
+					panic("index error!")
+				}
+	
+				out := wtree.rank(words[0], int(i))
+				fmt.Println(out)
+			}	
+		case "select":
+			// $wt access <saved wt> <access indices>
+			if validate_args(args) == false {
+				panic("invalid arguments!")
+			}
+			
+			wtree := load_wt(args[1])
+
+			file, _ := os.Open(args[2])
+    		fscanner := bufio.NewScanner(file)
+			for fscanner.Scan() {
+				// fmt.Println(fscanner.Text())
+				words := strings.Fields(fscanner.Text())
+				i, err := strconv.ParseInt(words[1], 10, 32)
+				if err != nil {
+					panic("index error!")
+				}
+	
+				out := wtree.wtselect(words[0], int(i)-1)
+				fmt.Println(out)
+			}
+		case "dotgraph":
+			// $wt dotgraph <saved wt>
+			wtree := load_wt(args[1])
+
+			buf2 := &bytes.Buffer{}
+			memviz.Map(buf2, wtree)
+			fmt.Println(buf2.String())
+		case "runtests":
+			// $wt runtests
+			fmt.Println("running task1")
+			test_task1()
+			fmt.Println("writing task1-size and task1-times")
+			fmt.Println("running task2")
+			test_task2()
+			fmt.Println("writing task2-size and task2-times")
+			fmt.Println("running task3")
+			test_task3()
+			fmt.Println("writing task3.1-times and task3.2-times")
+		case "help":
+			fmt.Println("wt build <input string> <output file>")
+			fmt.Println("wt access <saved wt> <access indices file>")
+			fmt.Println("wt rank <saved wt> <access indices file>")
+			fmt.Println("wt select <saved wt> <access indices file>")
+			fmt.Println("wt dotgraph <saved wt>")
+			fmt.Println("\t if you hvae dot install, pipe the output")
+			fmt.Println("\t\t wt dotgraph <saved wt> | dot -Tpng -o graph.png")
+			fmt.Println("wt runtests")
+		default:
+			fmt.Println("unrecognized command!")
+	}
+
+	// bitvec := []int{1,0,0,1,0,1,1,1,0,1,0,0,1,0,1,0}
+	// bitvec := []bool{true, false, false, true, false, true, true, true, false, true, false, false, true, false, true, false}
+	// rs := build_rank_select(bitvec)
+	// fmt.Println(rs)	
+
+	// rank1 := rs.rank1(7)
+	// rank0 := rs.rank0(4)
+	// fmt.Println("rank", rank0)
+	// fmt.Println("rank", rank1)
+
+	// fmt.Println(bitvec)
+
+	// select1 := rs.select1(6)
+	// fmt.Println("select1", select1)
+	// select0 := rs.select0(3)
+	// fmt.Println("fselect0", select0)
+	// select0 = rs.select0(4)
+	// fmt.Println("fselect0", select0)	
+	// select0 = rs.select0(5)
+	// fmt.Println("fselect0", select0)
+	// select0 = rs.select0(6)
+	// fmt.Println("fselect0", select0)
+	// select0 = rs.select0(7)
+	// fmt.Println("fselect0", select0)
+
+	// text := "alabar_a_la_alabarda"
+	// twt := makeWT(len(text))
+	// twt = build_wt(twt, text)
+	// fmt.Println(twt)
+
+	// fmt.Println("$$$$$ ACCCESS $$$$$$$")
+	// c := twt.access(7)
+	// fmt.Println("access ", c)
+
+	// fmt.Println("$$$$$ RANK $$$$$$$")
+	// i := twt.rank("a", 10)
+	// fmt.Println("rank ", i)
+
+	// fmt.Println("$$$$$ SELECT $$$$$$$")
+	// s := twt.wtselect("a", 4)
+	// fmt.Println("select ", s)
+
+	// buf := &bytes.Buffer{}
+	// memviz.Map(buf, twt)
 	// fmt.Println(buf.String())
-
-
 	// fmt.Println(new_wt)
+	// fmt.Println("running task1")
+	// test_task1()
+	// fmt.Println("running task2")
+	// test_task2()
+	// fmt.Println("running task3")
+	// test_task3()
+}
+
+func generate_random_bitvec(l int) []bool {
+	vec := make([]bool, l)
+	
+	for j := 0; j < l; j++ {
+		vec[j] = rand.Intn(2) == 0
+	}
+
+	return vec
+}
+
+func test_task1() {
+	const n int = 11
+
+	var times [n][n]float64
+	var sizes [n]int
+
+
+	for i := 0; i < n; i++ {
+		bsize := int(math.Pow(2, float64(i)) * 1024)
+		vec := generate_random_bitvec(bsize)
+		rs := build_rank_select(vec)
+		sizes[i] = rs.overhead()
+
+		for runs := 0; runs < n; runs++ {
+			start := time.Now()
+			// time to do n rank operations on random indices
+			for j := 0; j < n; j++ {
+				rs.rank1(rand.Intn(bsize))
+			}
+			end := time.Now().Sub(start)
+
+			times[i][runs] = float64(end.Nanoseconds())
+		}
+	}
+
+	f, err := os.Create("task1-times.json")
+	if err != nil {
+		panic(err)
+	}
+
+	enc := json.NewEncoder(f)
+	err = enc.Encode(times)
+	f.Close()
+
+	f, err = os.Create("task1-size.json")
+	if err != nil {
+		panic(err)
+	}
+
+	enc = json.NewEncoder(f)
+	err = enc.Encode(sizes)
+	f.Close()
+}
+
+func test_task2() {
+	const n int = 11
+
+	var times [n][n]float64
+	var sizes [n]int
+
+
+	for i := 0; i < n; i++ {
+		bsize := int(math.Pow(2, float64(i)) * 1024)
+		vec := generate_random_bitvec(bsize)
+		rs := build_rank_select(vec)
+		sizes[i] = rs.overhead()
+
+		for runs := 0; runs < n; runs++ {
+			start := time.Now()
+			// time to do n select operations on random indices
+			for j := 0; j < n; j++ {
+				rs.select1(rand.Intn(bsize)/3)
+			}
+			end := time.Now().Sub(start)
+
+			times[i][runs] = float64(end.Nanoseconds())
+		}
+	}
+
+	f, err := os.Create("task2-times.json")
+	if err != nil {
+		panic(err)
+	}
+
+	enc := json.NewEncoder(f)
+	err = enc.Encode(times)
+	f.Close()
+
+	f, err = os.Create("task2-size.json")
+	if err != nil {
+		panic(err)
+	}
+
+	enc = json.NewEncoder(f)
+	err = enc.Encode(sizes)
+	f.Close()
+}
+
+func generate_random_string(l int, chars []string) string {
+	result := ""
+
+	for i := 0; i < l; i++ {
+		rchar := chars[rand.Intn(len(chars)-1)]
+		result += rchar
+	}
+
+	return result
+}
+
+func test_task3() {
+	const n int = 5
+
+	// part 1 - rank and select with string length
+	var times [n][2*n]float64
+	chars := []string{"a", "b", "c", "d", "e", "f", "g"}
+
+	for i := 0; i < n; i++ {
+		bsize := int(math.Pow(2, float64(i)) * 1024)
+		text := generate_random_string(bsize, chars)
+
+		twt := makeWT(len(text))
+		twt = build_wt(twt, text)
+
+		for runs := 0; runs < n; runs++ {
+			j := rand.Intn(20)
+			start := time.Now()
+			// time to do n rank operations on random indices
+			twt.rank(chars[rand.Intn(len(chars)-1)], rand.Intn(bsize))
+			end := time.Now().Sub(start)
+
+			times[i][runs] = float64(end.Nanoseconds())
+
+			start = time.Now()
+			// time to do n rank operations on random indices
+			twt.wtselect(chars[rand.Intn(len(chars)-1)], (j/2) + 1)
+			end = time.Now().Sub(start)
+
+			times[i][n + runs] = float64(end.Nanoseconds())
+		}
+	}
+
+	f, err := os.Create("task3.1-times.json")
+	if err != nil {
+		panic(err)
+	}
+
+	enc := json.NewEncoder(f)
+	err = enc.Encode(times)
+	f.Close()
+
+	fmt.Println("part 2")
+	
+	const n2 int = 8
+	var times2 [n2][2*n2]float64
+
+	for i := 3; i < n2; i++ {
+		bsize := int(64 * 1024)
+		text := generate_random_string(bsize, chars[0:i])
+		twt := makeWT(len(text))
+		twt = build_wt(twt, text)
+
+		for runs := 0; runs < n2; runs++ {
+			j := rand.Intn(20)
+			start := time.Now()
+			// time to do n rank operations on random indices
+			twt.rank(chars[rand.Intn(len(chars)-1)], rand.Intn(bsize))
+			end := time.Now().Sub(start)
+
+			times2[i][runs] = float64(end.Nanoseconds())
+
+			start = time.Now()
+			// time to do n rank operations on random indices
+			twt.wtselect(chars[rand.Intn(len(chars)-1)], (j/2) + 1)
+			end = time.Now().Sub(start)
+
+			times2[i][n2 + runs] = float64(end.Nanoseconds())
+		}
+	}
+
+	f, err = os.Create("task3.2-times.json")
+	if err != nil {
+		panic(err)
+	}
+
+	enc = json.NewEncoder(f)
+	err = enc.Encode(times2)
+	f.Close()
 }
