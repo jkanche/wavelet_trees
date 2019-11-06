@@ -6,45 +6,85 @@ import (
 	"math"
 	"os"
 	"bufio"
-	// "io"
 	"encoding/gob"
 	"encoding/json"
-	// "encoding/binary"
-	// "io/ioutil"
 	"sort"
 	"strings"
 	"strconv"
 	"bytes"
-	// "reflect"
-	// "unsafe"
-	// "runtime"
 	"time"
 	"github.com/bradleyjkemp/memviz"
-	// "github.com/go-restruct/restruct"
 )
 
-// probably unnecessary
-// type bvec struct {
-// 	bits []bool
-// 	length int
-// }
+// bitvec structure
+type bitvec struct {
+	bits []uint8
+}
 
-// func makebinVector(length int, randomize bool) {
-// 	vec := new(bvec)
-// 	vec.length = length
-// 	vec.bits = make([]bool, length)
-// 	if randomize {
-// 		for j := 0; j < length; j++ {
-// 			vec.bits[j] = rand.Int(1)
-// 		}
-// 	}
-// }
+// create a bit vector
+func makeBitvec(input []bool) *bitvec {
+	size := (len(input) / 8)
 
+	if len(input) % 8 > 0 {
+		size += 1
+	}
+
+	// fmt.Println("size ", size)
+	bvec := new(bitvec)
+	bvec.bits = make([]uint8, size)
+
+	val := 0
+
+	if input[0] == true {
+		val += int(math.Pow(float64(2), float64(7)))
+	}
+	// fmt.Println("val ", val)
+	// fmt.Println("len(input) ", len(input))
+
+	for i := 1; i < len(input); i++ {
+
+		// fmt.Println("i ", i)
+
+		if i/8 == 0 {
+			// fmt.Println("i/8 == 0 ", i/8)
+
+			bvec.bits[i/8] = uint8(val)
+			val = 0
+		}
+
+		mod := 7 - (i % 8)
+
+		// fmt.Println("mod ", mod)
+
+		if input[i] == true {
+			val += int(math.Pow(float64(2), float64(mod)))
+		}
+	}
+
+	return bvec
+}
+
+// use bitwise AND to get bit at a position
+func (bv bitvec) getBitAt(i int) uint8 {
+	block := i / 8
+	mod := i % 8
+
+	bitcheck := uint8(math.Pow(float64(2), float64(mod)))
+
+	if bv.bits[block] & bitcheck == 0 {
+		return 0
+	}
+	
+	return 1
+}
+
+// rank-select structure
 type rs_struct struct {
-	Bits []bool
+	Bits *bitvec
 	Sblocks []int
 	Sblock_length int
 	Blocks []int
+	Block_slice []int
 	Block_length int
 	Table map[int][]int
 }
@@ -55,10 +95,11 @@ func build_rank_select(bits []bool) *rs_struct {
 	block_size := int(math.Log2(l)/2)
 
 	rs := new(rs_struct)
-	rs.Bits = bits
+	rs.Bits = makeBitvec(bits)
 	rs.Sblocks = make([]int, int(math.Ceil(l/float64(sblock_size))))
 	rs.Sblock_length = sblock_size
 	rs.Blocks = make([]int, int(math.Ceil(l/float64(block_size))))
+	rs.Block_slice = make([]int, int(math.Ceil(l/float64(block_size))))
 	rs.Block_length = block_size
 	rs.Table = make(map[int][]int)
 
@@ -70,8 +111,14 @@ func build_rank_select(bits []bool) *rs_struct {
 	}
 	rs.Sblocks[0] = 0
 	rs.Blocks[0] = 0
+	temp_block_val := 0
+
+	if bits[0] == true {
+		temp_block_val = int(math.Pow(2, float64(block_size - 1)))
+	}
 
 	for i := 1; i < len(bits); i++ {
+		// fmt.Println(i, (i%block_size))
 		if i % sblock_size == 0 {
 			last_block_rank = global_rank
 			rs.Sblocks[i/sblock_size] = global_rank
@@ -79,12 +126,23 @@ func build_rank_select(bits []bool) *rs_struct {
 
 		if i % block_size == 0 {
 			rs.Blocks[i/block_size] = global_rank - last_block_rank
+			// fmt.Println("block slice ", i, (i/block_size) - 1, temp_block_val)
+			rs.Block_slice[(i/block_size)-1] = temp_block_val
+			temp_block_val = 0
+		}
+
+		if bits[i] == true {
+			temp_block_val += int(math.Pow(2, float64(block_size - (i%block_size) - 1)))
 		}
 
 		if bits[i] == true {
 			global_rank++ 
 		}
+
+		// fmt.Println("tbv", temp_block_val)
 	}
+	// fmt.Println(block_size)
+	rs.Block_slice[len(rs.Block_slice)-1] = temp_block_val
 
 	for i := 0; i < int(math.Pow(2, float64(block_size))); i++ {
 		rs.Table[i] = make([]int, block_size)
@@ -110,15 +168,16 @@ func build_rank_select(bits []bool) *rs_struct {
 	return rs
 }
 
+// calculate overhead for the rank-select structure
+// can use unsafe.size() but doesn't return the actual size
 func (rs rs_struct) overhead() int {
-	// fmt.Println("rs ", rs.Sblock_length, rs.Block_length, len(rs.Table))
 
-	// return int(unsafe.Sizeof(rs))
-	return (64 * rs.Sblock_length) +  64 + (64 * rs.Block_length) + 64 + (64 * len(rs.Table) * rs.Block_length)
-	// return len(rs.Sblocks) + int(unsafe.Sizeof(rs.Sblock_length)) + 
-	// 		int(unsafe.Sizeof(rs.Block_length)) + int(unsafe.Sizeof(rs.Blocks))*len(rs.Blocks) + int(unsafe.Sizeof(rs.Table))
+	return (64 * rs.Sblock_length) + 64 + // size of superblock storing the sbox bin size 
+		(2 * 64 * rs.Block_length) + 64 +  // size of block + size of block size which stores slices as integers, and the binsize of block
+		(64 * len(rs.Table) * rs.Block_length) // size of table (its a map)
 }
 
+// rank1 operation on rank-select
 func (rs rs_struct) rank1(i int) int {
 	i_sblock := i/rs.Sblock_length
 	i_block := i/rs.Block_length
@@ -129,30 +188,38 @@ func (rs rs_struct) rank1(i int) int {
 
 	// fmt.Println(rs)
 	// fmt.Println("i_sblock, i_block, i_table", i_sblock, i_block, i_table)
-	
-	bit := rs.Bits[i_block*rs.Block_length:(i_block + 1) *rs.Block_length]
-	val := 0
-	for i := 0; i < len(bit); i++ {
-		tval := 0
-		if bit[len(bit) - i - 1] == true {
-			tval = 1
-		}
-		val += (tval * int(math.Pow(2, float64(i))))
-	}
+
+	// get val of block
+	val := rs.Block_slice[i_block]
+	// fmt.Println("i_sblock, i_block, i_table", i_sblock, i_block, i_table)
+
+	// bit := rs.Bits[i_block*rs.Block_length:(i_block + 1) *rs.Block_length]
+	// val := 0
+	// for i := 0; i < len(bit); i++ {
+	// 	tval := 0
+	// 	if bit[len(bit) - i - 1] == true {
+	// 		tval = 1
+	// 	}
+	// 	val += (tval * int(math.Pow(2, float64(i))))
+	// }
 
 	rank += rs.Table[val][i_table]
-	return rank - 1
+	return rank
 }
 
+// rank0 operation on rank-select
 func (rs rs_struct) rank0(i int) int {
 	rank := rs.rank1(i)
-	return i - rank - 1
+	return i - rank + 1
 }
 
+// select1 operation on rank-select
 func (rs rs_struct) select1(i int) int {
 	// fmt.Println("select1 ", i)
 	start := 0
-	end := len(rs.Bits)
+	// end := len(rs.Bits)
+	end := int(math.Pow(2, math.Sqrt(float64(rs.Sblock_length*2))))
+	oend := end
 
 	found := -1
 	rfound := -1
@@ -202,7 +269,7 @@ func (rs rs_struct) select1(i int) int {
 			}
 		} else {
 			// fmt.Println("found < i")
-			for j := start; j < len(rs.Bits); j++ {
+			for j := start; j < oend; j++ {
 				rank := rs.rank0(j)
 				// fmt.Println("j, rank ", j, rank)
 				if i == rank {
@@ -215,12 +282,15 @@ func (rs rs_struct) select1(i int) int {
 	return found
 }
 
+// select0 structure on rank-select
 func (rs rs_struct) select0(i int) int {
 	// fmt.Println("select0 ", i)
 	// fmt.Println("rs ", rs)
 
 	start := 0
-	end := len(rs.Bits)
+	// end := len(rs.Bits)
+	end := int(math.Pow(2, math.Sqrt(float64(rs.Sblock_length))))
+	oend := end
 
 	found := -1
 	rfound := -1
@@ -276,7 +346,7 @@ func (rs rs_struct) select0(i int) int {
 			}
 		} else {
 			// fmt.Println("found < i")
-			for j := start; j < len(rs.Bits); j++ {
+			for j := start; j < oend; j++ {
 				rank := rs.rank0(j)
 				// fmt.Println("j, rank ", j, rank)
 				if i == rank {
@@ -290,10 +360,11 @@ func (rs rs_struct) select0(i int) int {
 	return found
 }
 
+// wavelet structure
 type wt struct {
 	Edges map[int]*wt
 	Text string
-	Bits []bool
+	Bits *bitvec
 	Bitmap map[string]bool
 	Rs *rs_struct
 	parent *wt
@@ -303,13 +374,15 @@ func makeWT(length int) *wt {
 	wtree := new(wt)
 	wtree.Edges = make(map[int]*wt)
 	wtree.Text = ""
-	wtree.Bits = make([]bool, length)
+	// wtree.Bits = make([]bool, length)
 	wtree.Bitmap = make(map[string]bool)
 	wtree.Rs = new(rs_struct)
 
 	return wtree
 }
 
+// creates bitvector for the given text and its right segement characters
+// assumption is all left characters = 0, rights = 1
 func make_bit_vector(text string, rseg []string) ([]bool, string, string) {
 	bits := make([]bool, len(text))
 	
@@ -342,7 +415,7 @@ func make_bit_vector(text string, rseg []string) ([]bool, string, string) {
 	return bits, lstring, rstring
 }
 
-
+// builds the wavelet tree 
 func build_wt(root *wt, text string) *wt {
 	// fmt.Println("Building ", text)
 
@@ -386,7 +459,7 @@ func build_wt(root *wt, text string) *wt {
 
 	// fmt.Println("bits, lstring, rstring ", bits, lstring, rstring)
 
-	root.Bits = bits
+	root.Bits = makeBitvec(bits)
 	root.Rs = build_rank_select(bits)
 	
 	if len(lchild) > 1 {
@@ -417,6 +490,7 @@ func build_wt(root *wt, text string) *wt {
 	return root
 }
 
+// access at i 
 func (wtree wt) access(i int) string {
 	// fmt.Println("i", i)
 	// fmt.Println("wtree", wtree)
@@ -426,10 +500,10 @@ func (wtree wt) access(i int) string {
 		return wtree.Text[0:1]
 	}
 
-	bit := wtree.Bits[i]
+	bit := wtree.Bits.getBitAt(i)
 	// fmt.Println("bit", bit)
 
-	if bit == false {
+	if bit == uint8(0) {
 		// go left
 		rleft := wtree.Rs.rank0(i)
 		// fmt.Println("left", rleft)
@@ -442,6 +516,7 @@ func (wtree wt) access(i int) string {
 	}
 }
 
+// rank of c, i
 func (wtree wt) rank(c string, i int) int {
 	// fmt.Println("c, i", c, i)
 	// fmt.Println("wtree", wtree)
@@ -469,6 +544,7 @@ func (wtree wt) rank(c string, i int) int {
 	}
 }
 
+// traverse_leaf 
 func (wtree wt) traverse_leaf(c string) *wt {
 	// fmt.Println("traverse leaf ", c)
 	if len(wtree.Edges) == 0 {
@@ -524,7 +600,7 @@ func (wtree wt) iselect(c string, i int) int {
 	return wtree.parent.iselect(c, isel)
 }
 
-
+// select of c,i
 func (wtree wt) wtselect(c string, i int) int {
 	// fmt.Println("c, i", c, i)
 	// traverse to leaf
@@ -545,6 +621,7 @@ func validate_args(args []string) bool {
 	return true
 }
 
+// saves wavelet to disk
 func (wtree wt) save_wt(fileName string) {
 	f, err := os.Create(fileName)
 	if err != nil {
@@ -559,6 +636,7 @@ func (wtree wt) save_wt(fileName string) {
 	f.Close()
 }
 
+// loads wavelet from disk
 func load_wt(fileName string) *wt {
 	f, err := os.Open(fileName)
 	if err != nil {
@@ -743,6 +821,7 @@ func main() {
 	// test_task3()
 }
 
+// generates a random bitvector of length l
 func generate_random_bitvec(l int) []bool {
 	vec := make([]bool, l)
 	
@@ -753,6 +832,7 @@ func generate_random_bitvec(l int) []bool {
 	return vec
 }
 
+// running tests from this point
 func test_task1() {
 	const n int = 11
 
