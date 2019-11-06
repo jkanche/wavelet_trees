@@ -41,7 +41,7 @@ library(reshape2)
 For this programming task, test your implementation by invoking it for bit vectors of various sizes, and plotting the bit-vector size (say N) versus the time requried to do some fixed number of rank operations. Also, plot the bit-vector size (say N) versus the result of calling the overhead() function. Does your implementation match the expected theoretical bounds?
 
 ```{r}
-times <- rjson::fromJSON(file="benchmarks/task1-times.json")
+times <- rjson::fromJSON(file="wt/task1-times.json")
 xlabels <- paste0("2^", seq(from=10, to=20))
 names(times) <- xlabels
 times <- as.data.frame(times)
@@ -57,7 +57,7 @@ plot1 <- ggplot(data=dmelt, aes(x = variable, y=value/1000000)) +
   labs(title="Time to run 10 rank operations")
 # plot1
 
-sizes <- rjson::fromJSON(file="benchmarks/task1-size.json")
+sizes <- rjson::fromJSON(file="wt/task1-size.json")
 names(sizes) <- xlabels
 
 data <- data.frame(sizes = sizes, xlabels = xlabels)
@@ -71,7 +71,7 @@ plot2 <- ggplot(data = data, aes(x = xlabels, y=sizes, group=1)) +
 
 grid.arrange(plot1, plot2, ncol=1)
 ```
-The tests were conducted by exponentially increasing the size of the bit vector (starting from 2^10^ to 2^20^). For each bit vector, I measure the size of overhead the `rank_select` data structure and the time to run `rank1` operations on randomly selected indices. For each measure, I calculate the mean and standard deviation across 10 runs. The plot on the top displays the time to run a fixed number (=10) of `rank1` operations and the bottom displays the size of the overhead as the size of the bit vector increases. The plots indicate the rank operations are almost contant time and is independe tof the size of the bit vector. The size of overhead is o(size(bitvector)) thus matching the theoretical bounds of succuint rank data structure.
+The tests were conducted by exponentially increasing the size of the bit vector (starting from 2^10^ to 2^20^). For each bit vector, I measure the size of overhead the `rank_select` data structure and the time to run `rank1` operations on randomly selected indices. For each measure, I calculate the mean and standard deviation across 10 runs. The plot on the top displays the time to run a fixed number (=10) of `rank1` operations and the bottom displays the size of the overhead as the size of the bit vector increases. The plots indicate the rank operations are almost contant time and is independe tof the size of the bit vector. The size of overhead is atmost the size of the bitvector (Z + o(Z)), thus matching the theoretical bounds of succint rank data structure.
 
 
 ## Task 2 — bit-vector select
@@ -79,7 +79,7 @@ The tests were conducted by exponentially increasing the size of the bit vector 
 For this programming task, test your implementation by invoking it for bit vectors of various sizes, and plotting the bit-vector size (say N) versus the time requried to do some fixed number of select operations. Also, plot the bit-vector size (say N) versus the result of calling the overhead() function. Does your implementation match the expected theoretical bounds? If you feel ambitious, you can additionally implement a constant-time bit-vector select, though this is not required.
 
 ```{r}
-times <- rjson::fromJSON(file="benchmarks/task2-times.json")
+times <- rjson::fromJSON(file="wt/task2-times.json")
 xlabels <- paste0("2^", seq(from=10, to=20))
 names(times) <- xlabels
 times <- as.data.frame(times)
@@ -95,7 +95,7 @@ plot1 <- ggplot(data=dmelt, aes(x = variable, y=value/1000000)) +
   labs(title="Time to run 10 select operations")
 # plot1
 
-sizes <- rjson::fromJSON(file="benchmarks/task2-size.json")
+sizes <- rjson::fromJSON(file="wt/task2-size.json")
 names(sizes) <- xlabels
 
 data <- data.frame(sizes = sizes, xlabels = xlabels)
@@ -110,7 +110,7 @@ plot2 <- ggplot(data = data, aes(x = xlabels, y=sizes, group=1)) +
 grid.arrange(plot1, plot2, ncol=1)
 ```
 
-The tests were conducted exactly similar to the `rank` operations for Task 1. Instead of the rank, we now measure the time for 10 `select1` operations on randomly selected indices. Again the `select` operations are almost constant time and is independent of the size of the bit vector.
+The tests were conducted exactly similar to the `rank` operations for Task 1. Instead of the rank, we now measure the time for 10 `select1` operations on randomly selected indices. Again the `select` operations are on the order of log compared to the constant time `rank` operations. Since the `select` operations use the same rank data structure, the size of the overhead did not change.
 
 
 ## Task 3 — wavelet tree construction and query.
@@ -118,7 +118,7 @@ The tests were conducted exactly similar to the `rank` operations for Task 1. In
 For this programming task, test your implementation by invoking it for some input strings of various sizes and with various numbers of distinct characters in the input string. Try plotting how (1) the rank and select queries in the wavelet tree scale as a factor of the string length and (2) how, at a fixed string length, how the rank and select queries scale as a factor of the number of distinct characters in the input string. How do your plots compare to expectation? Note: for the purpose of making these plots, you need not use the command-line interace described above. You can avoid the overhead by constructing the wavelet tree from the input, and then issuing the rank and select queries directly via function calls without serializing the tree to disk first.
 
 ```{r}
-times <- rjson::fromJSON(file="benchmarks/task3.1-times.json")
+times <- rjson::fromJSON(file="wt/task3.1-times.json")
 xlabels <- paste0("2^", seq(from=10, to=14))
 names(times) <- xlabels
 times <- as.data.frame(times)
@@ -139,7 +139,7 @@ plot1 <- ggplot(data=dmelt, aes(x = xlabels, y=value/1000000, fill = var)) +
   labs(title="Time to run rank and select on varying length text ")
 # plot1
 
-times <- rjson::fromJSON(file="benchmarks/task3.2-times.json")
+times <- rjson::fromJSON(file="wt/task3.2-times.json")
 times <- times[-c(1,2,3)]
 xlabels <- seq(4, 8)
 names(times) <- xlabels
@@ -164,4 +164,6 @@ plot2 <- ggplot(data=dmelt, aes(x = xlabels, y=value/1000000, fill = var)) +
 grid.arrange(plot1, plot2, ncol=1)
 ```
 
-These plots visualize the time to run `rank` and `select` operations on Wavelet Trees. I run the operations across 5 different runs and calculate mean and standard deviation. The plot on the top measures the time to run these operations as the size of the text increases. The plot on the bottom measures the effect of alphabet size on these operations. The size of the text for this is fixed at 2^16^.
+These plots visualize the time to run `rank` and `select` operations on Wavelet Trees. I run the operations across 5 different runs and calculate mean and standard deviation. The plot on the top measures the time to run these operations as the size of the text increases. The plot on the bottom measures the effect of alphabet size on these operations. The size of the text for this is fixed at 2^16^. for the plot on the top, the `rank` & `select` operations increase on a log scale O(log k) matching the  expectation times. For the plot on the bottom, the `rank` and `select` also seems to increase some log k (k = alphabet size) for varying the alphabet size. 
+
+
